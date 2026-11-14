@@ -2,19 +2,35 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
-    <meta name="theme-color" content="#faf6ef" />
+    <meta
+      name="viewport"
+      content="width=device-width, initial-scale=1, viewport-fit=cover, interactive-widget=resizes-content"
+    />
+    <meta name="theme-color" content="#f8efe3" />
     <meta name="description" content="A simple checklist for shopping and event to-dos." />
     <title>My Checklist</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
+    <div class="app-bg" aria-hidden="true">
+      <span class="blob blob--1"></span>
+      <span class="blob blob--2"></span>
+      <span class="blob blob--3"></span>
+    </div>
+
     <header class="topbar">
       <div class="topbar__row">
         <div class="topbar__text">
           <h1 class="topbar__title">My Checklist</h1>
           <p class="topbar__sub">Tap an item to tick it off</p>
         </div>
+        <button class="iconbtn" id="listsButton" type="button" aria-label="Your lists" aria-haspopup="dialog">
+          <span class="icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24" width="22" height="22" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" focusable="false">
+              <path d="M4 7h16M4 12h16M4 17h10" />
+            </svg>
+          </span>
+        </button>
         <button class="iconbtn" id="menuButton" type="button" aria-label="More options" aria-haspopup="dialog">
           <span class="icon" aria-hidden="true">
             <svg viewBox="0 0 24 24" width="22" height="22" fill="currentColor" focusable="false">
@@ -51,6 +67,7 @@
         </button>
       </div>
       <div class="sheet__body" id="sheetBody"></div>
+      <div class="sheet__actions" id="sheetActions" hidden></div>
     </div>
 
     <div class="toast" id="toast" role="status" aria-live="polite"></div>

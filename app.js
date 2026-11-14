@@ -2,15 +2,18 @@
 
 /* ------------------------------------------------------------------ *
  * My Checklist — lists (events) -> categories -> items
- * Data lives in this phone's browser. A JSON seed lives in the repo.
+ * Saved on this device; optionally committed back to the repo so the
+ * deployment picks up the change automatically.
  * ------------------------------------------------------------------ */
 
 const STORAGE_KEY = 'my-checklist-v1';
 const SEED_PATH = 'data/checklist.json';
+const SYNC_URL = 'api/sync';
 
 const el = {
   chips: document.getElementById('listChips'),
   main: document.getElementById('main'),
+  listsButton: document.getElementById('listsButton'),
   menuButton: document.getElementById('menuButton'),
   addItemButton: document.getElementById('addItemButton'),
   addCategoryButton: document.getElementById('addCategoryButton'),
@@ -18,6 +21,7 @@ const el = {
   sheet: document.getElementById('sheet'),
   sheetTitle: document.getElementById('sheetTitle'),
   sheetBody: document.getElementById('sheetBody'),
+  sheetActions: document.getElementById('sheetActions'),
   sheetClose: document.getElementById('sheetClose'),
   toast: document.getElementById('toast'),
   fileInput: document.getElementById('fileInput'),
@@ -36,13 +40,15 @@ const ICON_PATHS = {
   pencil:
     '<path d="M4 20h4l10-10-4-4L4 16v4z" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"/><path d="M13.5 5.5l4 4" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round"/>',
   plus: '<path d="M12 5v14M5 12h14" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/>',
+  trash:
+    '<path d="M5 7h14M9.5 7V5h5v2M8 7l.9 12h6.2L16 7" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>',
   download:
     '<path d="M12 4v11m0 0l4-4m-4 4l-4-4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 19h14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>',
   upload:
     '<path d="M12 20V9m0 0l4 4m-4-4l-4 4" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><path d="M5 5h14" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round"/>',
 };
 
-/* ---------- small helpers ---------- */
+/* ---------- helpers ---------- */
 
 function uid(prefix) {
   return prefix + '-' + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
@@ -72,11 +78,12 @@ function h(tag, props, children) {
 
 function iconEl(name, size) {
   const span = h('span', { class: 'icon', 'aria-hidden': 'true' });
+  const px = size || 20;
   span.innerHTML =
     '<svg viewBox="0 0 24 24" width="' +
-    (size || 20) +
+    px +
     '" height="' +
-    (size || 20) +
+    px +
     '" fill="currentColor" focusable="false">' +
     (ICON_PATHS[name] || '') +
     '</svg>';
@@ -92,6 +99,10 @@ function invalidate(input) {
   input.classList.add('is-invalid');
   input.focus();
   input.addEventListener('input', () => input.classList.remove('is-invalid'), { once: true });
+}
+
+function buzz() {
+  if (navigator.vibrate) navigator.vibrate(8);
 }
 
 let toastTimer = null;
@@ -149,20 +160,6 @@ function createList(name) {
   return { id: uid('list'), name: name || 'New list', categories: [{ id: uid('cat'), name: 'General', items: [] }] };
 }
 
-function persist() {
-  app.data.updatedAt = new Date().toISOString();
-  try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(app.data));
-  } catch (error) {
-    toast('Could not save on this device');
-  }
-}
-
-function commit() {
-  persist();
-  render();
-}
-
 function countItems(list) {
   let total = 0;
   let done = 0;
@@ -175,9 +172,115 @@ function countItems(list) {
   return { total, done };
 }
 
+function summaryText(total, done) {
+  if (!total) return 'No items yet — tap “+ Add item”.';
+  if (done === total) return 'All ' + total + ' items are ticked off';
+  return done + ' of ' + total + ' ticked off';
+}
+
+function persist() {
+  app.data.updatedAt = new Date().toISOString();
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(app.data));
+  } catch (error) {
+    toast('Could not save on this device');
+  }
+  scheduleSync();
+}
+
+function commit() {
+  persist();
+  render();
+}
+
+/* ---------- GitHub sync (optional) ---------- */
+
+let booted = false;
+let syncTimer = null;
+let syncedSnapshot = null;
+let syncState = 'idle'; // idle | saved | ready | off | error
+
+function syncLabel() {
+  if (syncState === 'saved') return 'Saved on this phone and committed to GitHub. The deployment updates from that commit.';
+  if (syncState === 'ready') return 'Saved on this phone. New changes are also committed to GitHub.';
+  if (syncState === 'error') return 'Saved on this phone. The last GitHub sync did not go through.';
+  if (syncState === 'off') return 'Saved on this phone only. GitHub sync is not configured on this deployment.';
+  return 'Saved on this phone.';
+}
+
+function scheduleSync() {
+  if (!booted) return;
+  clearTimeout(syncTimer);
+  syncTimer = setTimeout(pushSnapshot, 2500);
+}
+
+async function pushSnapshot() {
+  const payload = JSON.stringify(app.data);
+  if (payload === syncedSnapshot) return;
+  try {
+    const response = await fetch(SYNC_URL, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: payload,
+    });
+    if (response.status === 501) {
+      syncState = 'off';
+      return;
+    }
+    if (!response.ok) {
+      syncState = 'error';
+      return;
+    }
+    syncedSnapshot = payload;
+    syncState = 'saved';
+  } catch (error) {
+    syncState = 'off';
+  }
+}
+
+async function probeSync() {
+  try {
+    const response = await fetch(SYNC_URL, { method: 'GET', cache: 'no-store' });
+    if (!response.ok) return 'off';
+    const result = await response.json().catch(() => ({}));
+    return result.configured ? 'ready' : 'off';
+  } catch (error) {
+    return 'off';
+  }
+}
+
+/* ---------- keyboard-aware sheet sizing ---------- */
+
+function fitSheet() {
+  const viewport = window.visualViewport;
+  if (!viewport) return;
+  const gap = Math.max(0, window.innerHeight - (viewport.offsetTop + viewport.height));
+  el.sheet.style.setProperty('--kb', Math.round(gap) + 'px');
+  el.sheet.style.setProperty('--vvh', Math.round(viewport.height) + 'px');
+}
+
+/* Keep the focused field inside the sheet once the keyboard has opened,
+   without scrolling the page behind the sheet. */
+function keepFieldVisible(field) {
+  [120, 320, 560].forEach((delay) => {
+    setTimeout(() => {
+      if (!field.isConnected) return;
+      fitSheet();
+      const body = el.sheetBody;
+      const fieldRect = field.getBoundingClientRect();
+      const bodyRect = body.getBoundingClientRect();
+      if (fieldRect.bottom > bodyRect.bottom - 16) {
+        body.scrollTop += fieldRect.bottom - bodyRect.bottom + 28;
+      } else if (fieldRect.top < bodyRect.top + 12) {
+        body.scrollTop -= bodyRect.top - fieldRect.top + 28;
+      }
+    }, delay);
+  });
+}
+
 /* ---------- render ---------- */
 
-function render(focusSelector) {
+function render() {
   const list = activeList();
   if (list) app.activeListId = list.id;
   renderChips(list);
@@ -201,11 +304,6 @@ function render(focusSelector) {
         text: 'Categories keep a big list tidy — like “Pooja items”, “Flowers”, “Groceries”.',
       })
     );
-  }
-
-  if (focusSelector) {
-    const next = document.querySelector(focusSelector);
-    if (next) next.focus({ preventScroll: true });
   }
 }
 
@@ -240,9 +338,6 @@ function renderChips(list) {
 function summaryCard(list) {
   const { total, done } = countItems(list);
   const pct = total ? Math.round((done / total) * 100) : 0;
-  let meta = 'No items yet — tap “+ Add item”.';
-  if (total && done === total) meta = 'All ' + total + ' items are ticked off';
-  else if (total) meta = done + ' of ' + total + ' ticked off';
 
   return h('div', { class: 'summary' }, [
     h('div', { class: 'summary__head' }, [
@@ -258,10 +353,10 @@ function summaryCard(list) {
         [iconEl('dots', 20)]
       ),
     ]),
-    h('p', { class: 'summary__meta', text: meta }),
-    total
-      ? h('div', { class: 'bar' }, [h('span', { class: 'bar__fill', style: 'width:' + pct + '%' })])
-      : null,
+    h('p', { class: 'summary__meta', 'data-summary-meta': 'true', text: summaryText(total, done) }),
+    h('div', { class: 'bar', 'data-summary-bar': 'true', hidden: !total }, [
+      h('span', { class: 'bar__fill', style: 'width:' + pct + '%' }),
+    ]),
   ]);
 }
 
@@ -270,7 +365,9 @@ function categorySection(cat) {
   const section = h('section', { class: 'cat' }, [
     h('div', { class: 'cat__head' }, [
       h('h3', { class: 'cat__name', text: cat.name }),
-      cat.items.length ? h('span', { class: 'cat__count', text: done + '/' + cat.items.length }) : null,
+      cat.items.length
+        ? h('span', { class: 'cat__count', 'data-cat-count': cat.id, text: done + '/' + cat.items.length })
+        : null,
       h(
         'button',
         {
@@ -314,11 +411,7 @@ function itemRow(item) {
         'aria-pressed': item.done ? 'true' : 'false',
         'aria-label': item.name + (item.done ? ' — ticked. Tap to undo.' : ''),
         'data-toggle': item.id,
-        onclick: () => {
-          item.done = !item.done;
-          persist();
-          render('[data-toggle="' + item.id + '"]');
-        },
+        onclick: (event) => tickItem(item, event.currentTarget.closest('.item')),
       },
       [h('span', { class: 'check' }, [iconEl('check', 20)]), h('span', { class: 'item__name', text: item.name })]
     ),
@@ -335,18 +428,63 @@ function itemRow(item) {
   ]);
 }
 
+/* Ticking updates the row in place so the check, line and bar can animate. */
+function tickItem(item, row) {
+  item.done = !item.done;
+
+  if (row) {
+    row.classList.toggle('is-done', item.done);
+    const main = row.querySelector('.item__main');
+    if (main) {
+      main.setAttribute('aria-pressed', item.done ? 'true' : 'false');
+      main.setAttribute('aria-label', item.name + (item.done ? ' — ticked. Tap to undo.' : ''));
+    }
+  }
+
+  refreshCounts();
+  buzz();
+  persist();
+}
+
+function refreshCounts() {
+  const list = activeList();
+  if (!list) return;
+
+  list.categories.forEach((cat) => {
+    const label = document.querySelector('[data-cat-count="' + cat.id + '"]');
+    if (label) label.textContent = cat.items.filter((item) => item.done).length + '/' + cat.items.length;
+  });
+
+  const { total, done } = countItems(list);
+  const meta = document.querySelector('[data-summary-meta]');
+  if (meta) meta.textContent = summaryText(total, done);
+
+  const bar = document.querySelector('[data-summary-bar]');
+  if (bar) {
+    bar.hidden = !total;
+    const fill = bar.querySelector('.bar__fill');
+    if (fill) fill.style.width = (total ? Math.round((done / total) * 100) : 0) + '%';
+  }
+}
+
 /* ---------- sheets ---------- */
 
 function openSheet(title, build) {
   el.sheetTitle.textContent = title;
   el.sheetBody.textContent = '';
-  build(el.sheetBody);
+  el.sheetActions.textContent = '';
+  el.sheetActions.hidden = true;
+
+  build(el.sheetBody, el.sheetActions);
+  if (el.sheetActions.childElementCount) el.sheetActions.hidden = false;
+
+  fitSheet();
   el.scrim.hidden = false;
   el.sheet.hidden = false;
   document.body.style.overflow = 'hidden';
   app.sheetOpen = true;
 
-  // Read a layout value first so the browser has the closed state to slide from.
+  // Lay the closed state out first so the slide has somewhere to come from.
   void el.sheet.offsetHeight;
   el.scrim.classList.add('is-open');
   el.sheet.classList.add('is-open');
@@ -370,7 +508,9 @@ function closeSheet() {
     el.sheet.hidden = true;
     el.scrim.hidden = true;
     el.sheetBody.textContent = '';
-  }, 260);
+    el.sheetActions.textContent = '';
+    el.sheetActions.hidden = true;
+  }, 400);
 }
 
 function openItemSheet(options) {
@@ -385,7 +525,7 @@ function openItemSheet(options) {
     list.categories[0];
   let categoryId = owner ? owner.id : preferred ? preferred.id : null;
 
-  openSheet(item ? 'Edit item' : 'Add item', (body) => {
+  openSheet(item ? 'Edit item' : 'Add item', (body, actions) => {
     const form = h('form', { class: 'form', novalidate: true });
 
     const input = h('input', {
@@ -435,6 +575,7 @@ function openItemSheet(options) {
           onclick: () => {
             newRow.hidden = false;
             newName.focus();
+            keepFieldVisible(newName);
           },
         })
       );
@@ -468,35 +609,9 @@ function openItemSheet(options) {
     paintPicker();
 
     form.append(
-      h('div', { class: 'field' }, [
-        h('label', { class: 'field__label', for: 'itemName', text: 'Item name' }),
-        input,
-      ]),
-      h('div', { class: 'field' }, [h('span', { class: 'field__label', text: 'Category' }), picker, newRow]),
-      h('button', {
-        class: 'btn btn--primary btn--block',
-        type: 'submit',
-        text: item ? 'Save changes' : 'Add to list',
-      })
+      h('div', { class: 'field' }, [h('label', { class: 'field__label', for: 'itemName', text: 'Item name' }), input]),
+      h('div', { class: 'field' }, [h('span', { class: 'field__label', text: 'Category' }), picker, newRow])
     );
-
-    if (item) {
-      form.append(
-        h('button', {
-          class: 'btn btn--danger btn--block',
-          type: 'button',
-          text: 'Delete item',
-          onclick: () => {
-            if (!confirm('Delete “' + item.name + '”?')) return;
-            list.categories.forEach((cat) => {
-              cat.items = cat.items.filter((row) => row.id !== item.id);
-            });
-            closeSheet();
-            commit();
-          },
-        })
-      );
-    }
 
     form.addEventListener('submit', (event) => {
       event.preventDefault();
@@ -528,6 +643,33 @@ function openItemSheet(options) {
     });
 
     body.append(form);
+
+    actions.append(
+      h('button', {
+        class: 'btn btn--primary btn--block',
+        type: 'button',
+        text: item ? 'Save changes' : 'Add to list',
+        onclick: () => form.requestSubmit(),
+      })
+    );
+
+    if (item) {
+      actions.append(
+        h('button', {
+          class: 'btn btn--danger btn--block',
+          type: 'button',
+          text: 'Delete item',
+          onclick: () => {
+            if (!confirm('Delete “' + item.name + '”?')) return;
+            list.categories.forEach((cat) => {
+              cat.items = cat.items.filter((row) => row.id !== item.id);
+            });
+            closeSheet();
+            commit();
+          },
+        })
+      );
+    }
   });
 }
 
@@ -537,7 +679,7 @@ function openCategorySheet(options) {
   const settings = options || {};
   const editing = Boolean(settings.category);
 
-  openSheet(editing ? 'Category options' : 'New category', (body) => {
+  openSheet(editing ? 'Category options' : 'New category', (body, actions) => {
     const form = h('form', { class: 'form', novalidate: true });
     const input = h('input', {
       class: 'field__input',
@@ -554,30 +696,8 @@ function openCategorySheet(options) {
       h('div', { class: 'field' }, [
         h('label', { class: 'field__label', for: 'categoryName', text: 'Category name' }),
         input,
-      ]),
-      h('button', {
-        class: 'btn btn--primary btn--block',
-        type: 'submit',
-        text: editing ? 'Save name' : 'Add category',
-      })
+      ])
     );
-
-    if (editing) {
-      const count = settings.category.items.length;
-      form.append(
-        h('button', {
-          class: 'btn btn--danger btn--block',
-          type: 'button',
-          text: count ? 'Delete category and its ' + count + ' items' : 'Delete category',
-          onclick: () => {
-            if (!confirm('Delete “' + settings.category.name + '”?')) return;
-            list.categories = list.categories.filter((cat) => cat.id !== settings.category.id);
-            closeSheet();
-            commit();
-          },
-        })
-      );
-    }
 
     form.addEventListener('submit', (event) => {
       event.preventDefault();
@@ -598,6 +718,32 @@ function openCategorySheet(options) {
     });
 
     body.append(form);
+
+    actions.append(
+      h('button', {
+        class: 'btn btn--primary btn--block',
+        type: 'button',
+        text: editing ? 'Save name' : 'Add category',
+        onclick: () => form.requestSubmit(),
+      })
+    );
+
+    if (editing) {
+      const count = settings.category.items.length;
+      actions.append(
+        h('button', {
+          class: 'btn btn--danger btn--block',
+          type: 'button',
+          text: count ? 'Delete category and its ' + count + ' items' : 'Delete category',
+          onclick: () => {
+            if (!confirm('Delete “' + settings.category.name + '”?')) return;
+            list.categories = list.categories.filter((cat) => cat.id !== settings.category.id);
+            closeSheet();
+            commit();
+          },
+        })
+      );
+    }
   });
 }
 
@@ -607,7 +753,7 @@ function openListSheet(options) {
   const list = creating ? null : settings.list || activeList();
   if (!creating && !list) return;
 
-  openSheet(creating ? 'New list' : 'This list', (body) => {
+  openSheet(creating ? 'New list' : 'This list', (body, actions) => {
     const form = h('form', { class: 'form', novalidate: true });
     const input = h('input', {
       class: 'field__input',
@@ -623,41 +769,6 @@ function openListSheet(options) {
     form.append(
       h('div', { class: 'field' }, [h('label', { class: 'field__label', for: 'listName', text: 'List name' }), input])
     );
-
-    if (!creating) {
-      form.append(
-        h('p', {
-          class: 'hint',
-          text: 'One list is one event. Tap the lists at the top of the screen to switch.',
-        })
-      );
-    }
-
-    form.append(
-      h('button', {
-        class: 'btn btn--primary btn--block',
-        type: 'submit',
-        text: creating ? 'Create list' : 'Save name',
-      })
-    );
-
-    if (!creating) {
-      form.append(
-        h('button', {
-          class: 'btn btn--danger btn--block',
-          type: 'button',
-          text: 'Delete this list',
-          onclick: () => {
-            if (!confirm('Delete “' + list.name + '” and everything in it?')) return;
-            app.data.lists = app.data.lists.filter((entry) => entry.id !== list.id);
-            if (!app.data.lists.length) app.data.lists.push(createList('My list'));
-            app.activeListId = app.data.lists[0].id;
-            closeSheet();
-            commit();
-          },
-        })
-      );
-    }
 
     form.addEventListener('submit', (event) => {
       event.preventDefault();
@@ -678,7 +789,95 @@ function openListSheet(options) {
     });
 
     body.append(form);
+
+    if (!creating) {
+      body.append(
+        h('p', {
+          class: 'hint',
+          text: 'One list is one event. Tap the lists at the top of the screen to switch.',
+        })
+      );
+    }
+
+    actions.append(
+      h('button', {
+        class: 'btn btn--primary btn--block',
+        type: 'button',
+        text: creating ? 'Create list' : 'Save name',
+        onclick: () => form.requestSubmit(),
+      })
+    );
+
+    if (!creating) {
+      actions.append(
+        h('button', {
+          class: 'btn btn--danger btn--block',
+          type: 'button',
+          text: 'Delete this list',
+          onclick: () => deleteList(list),
+        })
+      );
+    }
   });
+}
+
+function openListsSheet() {
+  openSheet('Your lists', (body, actions) => {
+    const rows = h('div', { class: 'listrows' });
+
+    app.data.lists.forEach((list) => {
+      const { total, done } = countItems(list);
+      const isActive = list.id === app.activeListId;
+
+      rows.append(
+        h('div', { class: 'listrow' + (isActive ? ' is-active' : '') }, [
+          h(
+            'button',
+            { class: 'listrow__open', type: 'button', onclick: () => openListSheet({ list }) },
+            [
+              h('span', { class: 'listrow__name', text: list.name }),
+              h('span', {
+                class: 'listrow__meta',
+                text: total ? done + ' of ' + total + ' ticked' : 'No items yet',
+              }),
+            ]
+          ),
+          h(
+            'button',
+            {
+              class: 'iconbtn listrow__delete',
+              type: 'button',
+              'aria-label': 'Delete ' + list.name,
+              onclick: () => deleteList(list),
+            },
+            [iconEl('trash', 20)]
+          ),
+        ])
+      );
+    });
+
+    body.append(rows);
+    body.append(h('p', { class: 'hint', text: 'Tap a list to rename it. The bin deletes the list and everything in it.' }));
+
+    actions.append(
+      h('button', {
+        class: 'btn btn--secondary btn--block',
+        type: 'button',
+        text: '+ New list',
+        onclick: () => openListSheet({ mode: 'create' }),
+      })
+    );
+  });
+}
+
+function deleteList(list) {
+  if (!confirm('Delete “' + list.name + '” and everything in it?')) return;
+  app.data.lists = app.data.lists.filter((entry) => entry.id !== list.id);
+  if (!app.data.lists.length) app.data.lists.push(createList('My list'));
+  app.activeListId = app.data.lists[0].id;
+  closeSheet();
+  commit();
+  toast('List deleted');
 }
 
 /* ---------- more options ---------- */
@@ -695,6 +894,9 @@ function actionRow(icon, title, sub, onClick) {
 
 function openMenuSheet() {
   openSheet('More options', (body) => {
+    const dot = h('span', { class: 'dot' + (syncState === 'saved' ? ' dot--on' : '') });
+    const status = h('span', { text: syncLabel() });
+
     body.append(
       h('h3', { class: 'sheet__section', text: 'Backup' }),
       actionRow('download', 'Download backup file', 'Save a copy of all lists as a .json file', downloadBackup),
@@ -704,12 +906,18 @@ function openMenuSheet() {
       }),
       h('h3', { class: 'sheet__section', text: 'This list' }),
       actionRow('check', 'Untick all items', 'Keep the items, start the list again', untickAll),
-      h('h3', { class: 'sheet__section', text: 'Where is my list saved?' }),
-      h('p', {
-        class: 'hint',
-        text: 'Your list is saved inside this phone’s browser, so it works without internet. Download a backup now and then to keep a copy in the GitHub repository.',
-      })
+      h('h3', { class: 'sheet__section', text: 'Saving' }),
+      h('div', { class: 'sheet__status' }, [dot, status])
     );
+
+    if (syncState !== 'saved') {
+      probeSync().then((state) => {
+        if (syncState === 'saved' || syncState === 'error' || !status.isConnected) return;
+        syncState = state;
+        dot.classList.toggle('dot--on', state === 'ready');
+        status.textContent = syncLabel();
+      });
+    }
   });
 }
 
@@ -799,11 +1007,13 @@ async function boot() {
   if (!app.data.lists.length) app.data.lists.push(createList('My list'));
 
   app.activeListId = app.data.lists[0].id;
+  booted = true;
   render();
 }
 
 el.addItemButton.addEventListener('click', () => openItemSheet());
 el.addCategoryButton.addEventListener('click', () => openCategorySheet());
+el.listsButton.addEventListener('click', openListsSheet);
 el.menuButton.addEventListener('click', openMenuSheet);
 el.sheetClose.addEventListener('click', closeSheet);
 el.scrim.addEventListener('click', closeSheet);
@@ -811,5 +1021,14 @@ el.fileInput.addEventListener('change', restoreFromFile);
 document.addEventListener('keydown', (event) => {
   if (event.key === 'Escape' && app.sheetOpen) closeSheet();
 });
+
+el.sheetBody.addEventListener('focusin', (event) => {
+  keepFieldVisible(event.target);
+});
+
+if (window.visualViewport) {
+  window.visualViewport.addEventListener('resize', fitSheet, { passive: true });
+  window.visualViewport.addEventListener('scroll', fitSheet, { passive: true });
+}
 
 boot();
