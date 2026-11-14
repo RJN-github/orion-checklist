@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate static app
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+
+      - name: Check JavaScript syntax
+        run: node --check app.js
+
+      - name: Validate checklist data
+        run: |
+          node -e "
+          const fs = require('fs');
+          const data = JSON.parse(fs.readFileSync('data/checklist.json', 'utf8'));
+          if (!Array.isArray(data.lists) || data.lists.length === 0) {
+            throw new Error('data/checklist.json must contain at least one list');
+          }
+          const seen = new Set();
+          for (const list of data.lists) {
+            if (!list.name) throw new Error('a list is missing its name');
+            for (const cat of list.categories || []) {
+              if (!cat.name) throw new Error('a category is missing its name');
+              for (const item of cat.items || []) {
+                if (!item.name) throw new Error('an item is missing its name');
+                if (!item.id || seen.has(item.id)) throw new Error('missing or duplicate item id: ' + item.id);
+                seen.add(item.id);
+              }
+            }
+          }
+          console.log('checklist.json OK — ' + data.lists.length + ' lists, ' + seen.size + ' items');
+          "
+
+      - name: Check page assets
+        run: |
+          node -e "
+          const fs = require('fs');
+          const html = fs.readFileSync('index.html', 'utf8');
+          for (const file of ['styles.css', 'app.js']) {
+            if (!html.includes(file)) throw new Error('index.html does not load ' + file);
+            if (!fs.existsSync(file)) throw new Error('missing file: ' + file);
+          }
+          console.log('index.html loads styles.css and app.js');
+          "

@@ -1,0 +1,9 @@
+# Review screenshots, kept locally only
+screenshots/
+
+# Freebuff workspace marker
+.freebuff/
+
+# OS noise
+.DS_Store
+Thumbs.db

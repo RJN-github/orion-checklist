@@ -1,0 +1,57 @@
+{
+  "version": 1,
+  "updatedAt": "2026-11-14T00:00:00.000Z",
+  "lists": [
+    {
+      "id": "list-puja-shopping",
+      "name": "Puja shopping",
+      "categories": [
+        {
+          "id": "cat-pooja",
+          "name": "Pooja items",
+          "items": [
+            { "id": "item-kumkum", "name": "Kumkum", "done": false },
+            { "id": "item-haldi", "name": "Haldi", "done": false },
+            { "id": "item-agarbatti", "name": "Agarbatti", "done": false },
+            { "id": "item-camphor", "name": "Camphor (kapoor)", "done": false },
+            { "id": "item-ghee", "name": "Ghee", "done": false },
+            { "id": "item-wicks", "name": "Cotton wicks", "done": false },
+            { "id": "item-matchbox", "name": "Matchbox", "done": false }
+          ]
+        },
+        {
+          "id": "cat-flowers",
+          "name": "Flowers & fruits",
+          "items": [
+            { "id": "item-marigold", "name": "Marigold flowers", "done": false },
+            { "id": "item-coconut", "name": "Coconuts (2)", "done": false },
+            { "id": "item-banana", "name": "Bananas (1 dozen)", "done": false },
+            { "id": "item-betel", "name": "Betel leaves", "done": false }
+          ]
+        },
+        {
+          "id": "cat-groceries",
+          "name": "Groceries",
+          "items": [
+            { "id": "item-rice", "name": "Rice (5 kg)", "done": false },
+            { "id": "item-sugar", "name": "Sugar (1 kg)", "done": false },
+            { "id": "item-milk", "name": "Milk", "done": false }
+          ]
+        },
+        {
+          "id": "cat-other",
+          "name": "Other things",
+          "items": [
+            { "id": "item-prasad", "name": "Prasad plates", "done": false },
+            { "id": "item-cloth", "name": "Cloth for decoration", "done": false }
+          ]
+        }
+      ]
+    },
+    {
+      "id": "list-general",
+      "name": "General",
+      "categories": [{ "id": "cat-general", "name": "General", "items": [] }]
+    }
+  ]
+}
